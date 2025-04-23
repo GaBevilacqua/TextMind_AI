@@ -1,3 +1,4 @@
+#IMPORTS
 import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -7,23 +8,20 @@ from nltk.corpus import stopwords
 import os
 import time
 import nltk
-
-# Configuração inicial do NLTK
 nltk.download('punkt', quiet=True)
 nltk.download('stopwords', quiet=True)
 nltk.download('averaged_perceptron_tagger', quiet=True)
 
-class HybridSummarizer:
+class ExtrativeSummarizer:
+    #Idioma, stopwords, TF-IDF
     def __init__(self, language='portuguese'):
-        """Inicializa o sumarizador com configurações para português"""
-        print("Inicializando sumarizador híbrido...")
+        print("Inicializando sumarizador extrativo...")
         self.language = language
-        self.stop_words = set(stopwords.words(self.language))  # Convertendo para set para performance
+        self.stop_words = set(stopwords.words(self.language))  
         self.vectorizer = TfidfVectorizer(stop_words=self.stop_words)
-        print("Sumarizador pronto!")
+        print("Inicio Pronto!")
     
-    def _calculate_sentence_importance(self, sentences):
-        """Calcula importância com bônus posicional e features adicionais"""
+    def CalculoImportancia(self, sentences):
         if len(sentences) <= 1:
             return [1.0] * len(sentences)
 
@@ -31,52 +29,53 @@ class HybridSummarizer:
         try:
             tfidf_matrix = self.vectorizer.fit_transform(sentences)
         except ValueError:
-            return [1.0] * len(sentences)  # Retorna importância uniforme se houver erro na vetorização
+            return [1.0] * len(sentences) 
         
         # Matriz de similaridade
         sim_matrix = cosine_similarity(tfidf_matrix)
         np.fill_diagonal(sim_matrix, 0)
         
-        # Normalização
+        # Normalização da matriz de similaridade
         row_sums = sim_matrix.sum(axis=1) + 1e-6
         norm_sim_matrix = sim_matrix / row_sums[:, np.newaxis]
         
-        # PageRank simplificado
+        # PageRank 
         damping = 0.85
         scores = np.ones(len(sentences)) / len(sentences)
         
         for _ in range(10):
             scores = damping * np.dot(norm_sim_matrix.T, scores) + (1 - damping) / len(sentences)
         
-        # Bônus híbrido (posição + features)
+        # Heuristica hibrida (posição + features)
         position_bonus = np.linspace(1.3, 0.9, len(sentences))  # Decaimento gradual
-        entity_bonus = np.array([1.2 if self._has_entities(s) else 1.0 for s in sentences])
+        entity_bonus = np.array([1.2 if self.Nomes(s) else 1.0 for s in sentences])
         
         return (scores * position_bonus * entity_bonus).tolist()
     
-    def _has_entities(self, sentence):
-        """Verifica se a frase contém entidades (nomes próprios, substantivos)"""
+    #Substantivos próprios e comuns => bonus
+    def Nomes(self, sentence):
         try:
             tagged = pos_tag(word_tokenize(sentence))
             return any(tag in ['NNP', 'NN'] for _, tag in tagged)
         except:
             return False
     
-    def generate_summary(self, clean_text, min_sentences=3, max_sentences=4, max_chars=800):
-        """Gera resumo com estratégia híbrida"""
+    #Gerar resumo com numero minimo e máximo de frases, bem como os caracteres
+    def Sumarizador(self, clean_text, min_sentences=5, max_sentences=7, max_chars=1200):
+        #String válida
         if not clean_text or not isinstance(clean_text, str):
-            return ""
-            
+            return ""     
+        #Quebra em frases       
         try:
             sentences = sent_tokenize(clean_text, language=self.language)
         except:
-            sentences = clean_text.split('. ')  # Fallback básico
+            sentences = clean_text.split('. ') 
             
         if len(sentences) <= min_sentences:
             return ' '.join(sentences)
         
         # Calcula importância com bônus
-        scores = self._calculate_sentence_importance(sentences)
+        scores = self.CalculoImportancia(sentences)
         
         # Seleção adaptativa
         selected_indices = []
@@ -84,13 +83,14 @@ class HybridSummarizer:
         
         # Garante pelo menos 1 das 2 primeiras frases
         lead_indices = sorted(range(min(2, len(sentences))), key=lambda i: -scores[i])
+        #Se couber no limite de frase e caracteres, adiciona a frase
         for idx in lead_indices:
             if (len(selected_indices) < max_sentences and 
                 total_chars + len(sentences[idx]) <= max_chars):
                 selected_indices.append(idx)
                 total_chars += len(sentences[idx])
         
-        # Completa com outras frases importantes
+        # Completa com outras frases importantes com base no text rank
         other_indices = [i for i in range(len(sentences)) if i not in lead_indices]
         ranked_others = sorted(other_indices, key=lambda i: -scores[i])
         
@@ -106,10 +106,10 @@ class HybridSummarizer:
         
         # Ordena e pós-processa
         selected_sentences = [sentences[i] for i in sorted(selected_indices)]
-        return self._post_process_summary(' '.join(selected_sentences))
+        return self.PosFase(' '.join(selected_sentences))
     
-    def _post_process_summary(self, summary):
-        """Pós-processamento inteligente"""
+    #Frases curtas e pontuação
+    def PosFase(self, summary):
         if not summary:
             return ""
             
@@ -127,31 +127,36 @@ class HybridSummarizer:
             if i == len(sentences)-1 or len(word_tokenize(s)) >= 5:
                 processed.append(s)
         
-        # Garante que termina com pontuação
+        # Pontuação
         if processed and processed[-1][-1] not in ['.', '!', '?']:
             processed[-1] = processed[-1].strip() + '.'
             
         return ' '.join(processed).replace(' .', '.').strip()
 
-def process_dataset(input_path, output_path, sample_size=None):
-    """Processa o dataset com a nova abordagem híbrida"""
+#Database
+def Pro_Database(input_path, output_path, sample_size=None): 
     try:
+        #Carrega CSV
         print(f"\nCarregando dados de {input_path}...")
         df = pd.read_csv(input_path, nrows=sample_size if sample_size else None)
         
-        required_cols = ['titulo', 'conteudo_limpo']
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        if missing_cols:
-            raise ValueError(f"Colunas obrigatórias não encontradas: {missing_cols}")
+        #Pŕe requesitos
+        req_cols = ['titulo', 'conteudo_limpo']
+        miss_cols = [col for col in req_cols if col not in df.columns]
+        if miss_cols:
+            raise ValueError(f"Colunas obrigatórias não encontradas: {miss_cols}")
         
         print(f"Processando {len(df)} registros...")
         
-        summarizer = HybridSummarizer()
+        #Cria sumarizador
+        sumarizador = ExtrativeSummarizer()
         
-        print("\nGerando resumos com abordagem híbrida...")
-        df['resumo_hibrido'] = df['conteudo_limpo'].apply(
-            lambda x: summarizer.generate_summary(str(x)) if pd.notna(x) else "")
+        #aplicando resumo
+        print("\nGerando resumos com abordagem extrativa...")
+        df['resumo_extrativo'] = df['conteudo_limpo'].apply(
+            lambda x: sumarizador.Sumarizador(str(x)) if pd.notna(x) else "")
         
+        #Salvar
         print(f"\nSalvando em {output_path}...")
         df.to_csv(output_path, index=False)
         print("Processo concluído com sucesso!")
@@ -159,7 +164,7 @@ def process_dataset(input_path, output_path, sample_size=None):
         # Exemplo de resumo gerado
         if not df.empty:
             print("\nExemplo de resumo:")
-            sample_summary = df.iloc[0]['resumo_hibrido']
+            sample_summary = df.iloc[0]['resumo_extrativo']
             print(sample_summary[:500] + ("..." if len(sample_summary) > 500 else ""))
         
     except Exception as e:
@@ -170,13 +175,10 @@ def process_dataset(input_path, output_path, sample_size=None):
 if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
     input_csv = os.path.normpath(os.path.join(current_dir, '..', 'Dataset', 'Historico_de_materias_processado.csv'))
-    output_csv = os.path.normpath(os.path.join(current_dir, '..', 'Dataset', 'Extrativo_Hibrido.csv'))
+    output_csv = os.path.normpath(os.path.join(current_dir, '..', 'Dataset', 'Extrativo_AmostraGen4.csv'))
 
-    # Teste com 10 registros primeiro
+    # Teste com 10
     try:
-        process_dataset(input_csv, output_csv, sample_size=10)
-        
-        # Para processar completo (descomente):
-        # process_dataset(input_csv, output_csv)
+        Pro_Database(input_csv, output_csv, sample_size=10)
     except Exception as e:
         print(f"Erro durante a execução: {e}")

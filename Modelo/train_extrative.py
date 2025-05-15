@@ -61,7 +61,7 @@ class ExtrativeSummarizer:
             return False
     
     #Gerar resumo com numero minimo e máximo de frases, bem como os caracteres
-    def Sumarizador(self, clean_text, min_sentences=5, max_sentences=7, max_chars=1200):
+    def Sumarizador(self, clean_text, min_sentences=5, max_sentences=6, max_chars=800):
         #String válida
         if not clean_text or not isinstance(clean_text, str):
             return ""     
@@ -70,6 +70,7 @@ class ExtrativeSummarizer:
             sentences = sent_tokenize(clean_text, language=self.language)
         except:
             sentences = clean_text.split('. ') 
+            sentences = [s + '.' for s in sentences if s]
             
         if len(sentences) <= min_sentences:
             return ' '.join(sentences)
@@ -81,28 +82,49 @@ class ExtrativeSummarizer:
         selected_indices = []
         total_chars = 0
         
-        # Garante pelo menos 1 das 2 primeiras frases
+        # Garante pelo menos 1 das 2 primeiras frases (lead)
         lead_indices = sorted(range(min(2, len(sentences))), key=lambda i: -scores[i])
-        #Se couber no limite de frase e caracteres, adiciona a frase
-        for idx in lead_indices:
-            if (len(selected_indices) < max_sentences and 
-                total_chars + len(sentences[idx]) <= max_chars):
-                selected_indices.append(idx)
-                total_chars += len(sentences[idx])
+        for idx in lead_indices[:1]:  # Garantir ao menos uma frase do lead
+            selected_indices.append(idx)
+            total_chars += len(sentences[idx])
         
-        # Completa com outras frases importantes com base no text rank
-        other_indices = [i for i in range(len(sentences)) if i not in lead_indices]
-        ranked_others = sorted(other_indices, key=lambda i: -scores[i])
+        # Ordena todas as frases por pontuação (excluindo as já selecionadas)
+        remaining_indices = [i for i in range(len(sentences)) if i not in selected_indices]
+        ranked_indices = sorted(remaining_indices, key=lambda i: -scores[i])
         
-        for idx in ranked_others:
+        # Adiciona frases até atingir os limites
+        for idx in ranked_indices:
+            # Verifica se já atingimos o máximo
             if len(selected_indices) >= max_sentences:
                 break
-            if (total_chars + len(sentences[idx]) > max_chars and 
-                len(selected_indices) >= min_sentences):
+                
+            # Verifica limite de caracteres
+            if total_chars + len(sentences[idx]) > max_chars:
+                # Se já temos o mínimo de frases, podemos parar
+                if len(selected_indices) >= min_sentences:
+                    break
+                # Caso contrário, tentamos incluir a próxima frase mais curta que caiba
                 continue
-            if idx not in selected_indices:
-                selected_indices.append(idx)
-                total_chars += len(sentences[idx])
+                
+            selected_indices.append(idx)
+            total_chars += len(sentences[idx])
+            
+            # Verifica se já atingimos o mínimo de frases e o limite de caracteres
+            if len(selected_indices) >= min_sentences and total_chars >= max_chars * 0.95:
+                break
+        
+        # Verificar minimo de frases
+        if len(selected_indices) < min_sentences and len(sentences) > min_sentences:
+            # Adiciona as frases mais curtas para completar o mínimo
+            remaining = [i for i in range(len(sentences)) if i not in selected_indices]
+            remaining_by_length = sorted(remaining, key=lambda i: len(sentences[i]))
+            
+            for idx in remaining_by_length:
+                if len(selected_indices) >= min_sentences:
+                    break
+                if total_chars + len(sentences[idx]) <= max_chars:
+                    selected_indices.append(idx)
+                    total_chars += len(sentences[idx])
         
         # Ordena e pós-processa
         selected_sentences = [sentences[i] for i in sorted(selected_indices)]
@@ -117,6 +139,7 @@ class ExtrativeSummarizer:
             sentences = sent_tokenize(summary, language=self.language)
         except:
             sentences = summary.split('. ')
+            sentences = [s + '.' for s in sentences if s and not s.endswith('.')]
             
         if len(sentences) <= 1:
             return summary
@@ -128,7 +151,7 @@ class ExtrativeSummarizer:
                 processed.append(s)
         
         # Pontuação
-        if processed and processed[-1][-1] not in ['.', '!', '?']:
+        if processed and not processed[-1].rstrip().endswith(('.', '!', '?')):
             processed[-1] = processed[-1].strip() + '.'
             
         return ' '.join(processed).replace(' .', '.').strip()
@@ -156,6 +179,10 @@ def Pro_Database(input_path, output_path, sample_size=None):
         df['resumo_extrativo'] = df['conteudo_limpo'].apply(
             lambda x: sumarizador.Sumarizador(str(x)) if pd.notna(x) else "")
         
+        # Verificação dos limites
+        char_counts = df['resumo_extrativo'].apply(len)
+        sent_counts = df['resumo_extrativo'].apply(lambda x: len(sent_tokenize(x)) if x else 0)
+        
         #Salvar
         print(f"\nSalvando em {output_path}...")
         df.to_csv(output_path, index=False)
@@ -164,8 +191,11 @@ def Pro_Database(input_path, output_path, sample_size=None):
         # Exemplo de resumo gerado
         if not df.empty:
             print("\nExemplo de resumo:")
-            sample_summary = df.iloc[0]['resumo_extrativo']
-            print(sample_summary[:500] + ("..." if len(sample_summary) > 500 else ""))
+            sample_idx = 0
+            sample_summary = df.iloc[sample_idx]['resumo_extrativo']
+            print(f"Título: {df.iloc[sample_idx]['titulo']}")
+            print(f"Caracteres: {len(sample_summary)}, Frases: {len(sent_tokenize(sample_summary))}")
+            print(sample_summary[:800] + ("..." if len(sample_summary) > 800 else ""))
         
     except Exception as e:
         print(f"\nErro no processamento: {str(e)}")
